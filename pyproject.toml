@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openbb-kdb"
+version = "0.1.0"
+description = "kdb+ integration for OpenBB: read tables as a provider, persist any OBBject, generic store. Connects to a kdb+ server over IPC via PyKX."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "AGPL-3.0-only" }
+dependencies = [
+    "openbb-core>=1.5.8",
+    "pykx>=2.5",
+]
+
+# Read path: provider="kdb" serves data stored in a kdb+ table.
+[project.entry-points."openbb_provider_extension"]
+kdb = "openbb_kdb:kdb_provider"
+
+# Write path: result.kdb.write(...) persists an OBBject result to a kdb+ table.
+[project.entry-points."openbb_obbject_extension"]
+kdb = "openbb_kdb:ext"
+
+[tool.setuptools.packages.find]
+include = ["openbb_kdb*"]

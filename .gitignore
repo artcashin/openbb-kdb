@@ -1,0 +1,18 @@
+# Python build artifacts
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.DS_Store
+
+# Secrets — never commit connection details or licenses
+.env
+*.env
+!.env.example
+# kdb+/PyKX license files (the client doesn't need one, but just in case)
+*.lic
+kc.lic
+k4.lic
+kx.lic
+q.k
