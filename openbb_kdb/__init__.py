@@ -13,7 +13,7 @@ from openbb_kdb.models.historical import (
 )
 from openbb_kdb.store import KDBStore, store
 
-__all__ = ["kdb_provider", "ext", "KDBStore", "store"]
+__all__ = ["kdb_provider", "ext", "KDB", "KDBStore", "store"]
 
 # --- Read path: provider extension -----------------------------------------
 kdb_provider = Provider(

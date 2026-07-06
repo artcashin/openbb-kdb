@@ -7,7 +7,7 @@ pandas (tick price/size -> OHLCV, or downsampled finer bars), with the same
 interval / pandas_anchor / date+datetime semantics as openbb-arcticdb.
 """
 
-# pylint: disable=unused-argument
+import math
 
 from datetime import date as dateType, datetime
 from typing import Any, List, Optional, Union
@@ -97,6 +97,7 @@ def _read_sync(query, credentials: Optional[dict]) -> list[dict]:
     from pandas import DatetimeIndex
 
     from openbb_kdb.utils import (
+        close_connection,
         get_connection,
         normalize_index,
         q_get,
@@ -112,7 +113,7 @@ def _read_sync(query, credentials: Optional[dict]) -> list[dict]:
     )
     conn = get_connection(host, port, user, password)
 
-    symbols = [s.strip() for s in query.symbol.split(",")]
+    symbols = [s.strip() for s in (query.symbol or "").split(",") if s.strip()]
     multiple = len(symbols) > 1
     interval = getattr(query, "interval", None) or "1d"
     rule = _pandas_rule(interval)
@@ -121,35 +122,39 @@ def _read_sync(query, credentials: Optional[dict]) -> list[dict]:
 
     out: list[dict] = []
     missing: list[str] = []
-    for sym in symbols:
-        name = table_name(sym)
-        if not q_has(conn, name):
-            missing.append(sym)
-            continue
-        df = q_get(conn, name).pd()
-        df = normalize_index(df)
-        if isinstance(df.index, DatetimeIndex) and (start_ts is not None or end_ts is not None):
-            lo = start_ts if start_ts is not None else df.index.min()
-            hi = end_ts if end_ts is not None else df.index.max()
-            df = df.loc[lo:hi]
-        if df is None or df.empty:
-            continue
-        if isinstance(df.index, DatetimeIndex):
-            # dropna on 'close' removes empty buckets (e.g. weekends) where sum()
-            # volume is 0 but first/last OHLC are NaN.
-            df = (
-                df.resample(rule, origin=origin)
-                .agg(**_ohlcv_agg(df.columns))
-                .dropna(subset=["close"])
-            )
-        df = df.reset_index()
-        if "date" not in df.columns:
-            df = df.rename(columns={df.columns[0]: "date"})
-        records = df.to_dict("records")
-        if multiple:
-            for rec in records:
-                rec["symbol"] = sym
-        out.extend(records)
+    try:
+        for sym in symbols:
+            name = table_name(sym)
+            if not q_has(conn, name):
+                missing.append(sym)
+                continue
+            df = q_get(conn, name).pd()
+            df = normalize_index(df)
+            if isinstance(df.index, DatetimeIndex) and (start_ts is not None or end_ts is not None):
+                lo = start_ts if start_ts is not None else df.index.min()
+                hi = end_ts if end_ts is not None else df.index.max()
+                df = df.loc[lo:hi]
+            if df is None or df.empty:
+                continue
+            if isinstance(df.index, DatetimeIndex):
+                # dropna on 'close' removes empty buckets (e.g. weekends) where sum()
+                # volume is 0 but first/last OHLC are NaN.
+                df = (
+                    df.resample(rule, origin=origin)
+                    .agg(**_ohlcv_agg(df.columns))
+                    .dropna(subset=["close"])
+                )
+            df = df.reset_index()
+            if "date" not in df.columns:
+                df = df.rename(columns={df.columns[0]: "date"})
+            records = df.to_dict("records")
+            if multiple:
+                for rec in records:
+                    rec["symbol"] = sym
+            out.extend(records)
+    finally:
+        close_connection(conn)
+
     if not out:
         detail = f" Unknown symbols: {missing}." if missing else ""
         raise EmptyDataError(f"No data in kdb+ on {host}:{port}.{detail}")
@@ -161,7 +166,7 @@ def _validate(query, data: list[dict], data_cls):
     for rec in data:
         clean = {
             k: v for k, v in rec.items()
-            if v is not None and not (isinstance(v, float) and v != v)
+            if not (isinstance(v, float) and math.isnan(v))
         }
         results.append(data_cls.model_validate(clean))
     results.sort(key=lambda r: (str(getattr(r, "symbol", "")), r.date))
@@ -172,6 +177,9 @@ def _build_fetcher(label: str, qp_base, data_base):
     """Create a kdb+ Fetcher for a given OHLCV standard model."""
 
     class _QP(qp_base):  # type: ignore[valid-type, misc]
+        # OpenBB core reads this dunder directly (registry_map / package_builder)
+        # to enable multi-symbol; pydantic's model_config json_schema_extra is a
+        # different mechanism core never inspects, so it must stay this attribute.
         __json_schema_extra__ = {"symbol": {"multiple_items_allowed": True}}
         interval: Optional[str] = Field(
             default=None,
@@ -216,10 +224,12 @@ def _build_fetcher(label: str, qp_base, data_base):
 
     class _Fetcher(Fetcher[_QP, List[_Data]]):
         @staticmethod
+        # pylint: disable=unused-argument
         def transform_query(params: dict[str, Any]) -> _QP:
             return _QP(**params)
 
         @staticmethod
+        # pylint: disable=unused-argument
         async def aextract_data(query, credentials, **kwargs) -> list[dict]:
             # pylint: disable=import-outside-toplevel
             import asyncio
@@ -227,6 +237,7 @@ def _build_fetcher(label: str, qp_base, data_base):
             return await asyncio.to_thread(_read_sync, query, credentials)
 
         @staticmethod
+        # pylint: disable=unused-argument
         def transform_data(query, data, **kwargs):
             return _validate(query, data, _Data)
 

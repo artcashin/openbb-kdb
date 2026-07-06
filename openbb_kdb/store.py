@@ -12,6 +12,7 @@ DataFrame on read.
     s.list_symbols(); s.has("AAPL"); s.meta("AAPL"); s.delete("AAPL"); s.append("AAPL", more)
 """
 
+import math
 from typing import Any, Optional, Sequence
 
 
@@ -45,6 +46,15 @@ class KDBStore:
             )
         return self._conn_obj
 
+    def close(self) -> None:
+        """Close the underlying kdb+ connection, if open. New calls re-connect."""
+        if self._conn_obj is not None:
+            # pylint: disable=import-outside-toplevel
+            from openbb_kdb.utils import close_connection
+
+            close_connection(self._conn_obj)
+            self._conn_obj = None
+
     @staticmethod
     def _to_frame(data: Any):
         """OBBject / DataFrame / records -> a column-oriented frame for kdb.
@@ -67,7 +77,10 @@ class KDBStore:
             raise ValueError("No data to write to kdb+.")
         df = normalize_index(df)
         if isinstance(df.index, DatetimeIndex):
-            df = df.reset_index()  # date becomes a column
+            idx_name = df.index.name
+            if idx_name and idx_name in df.columns:
+                df = df.drop(columns=[idx_name])
+            df = df.reset_index()
         return df
 
     @staticmethod
@@ -81,7 +94,7 @@ class KDBStore:
         out = df.reset_index(drop=isinstance(df.index, RangeIndex))
         results = [
             Data.model_validate(
-                {k: v for k, v in rec.items() if not (isinstance(v, float) and v != v)}
+                {k: v for k, v in rec.items() if not (isinstance(v, float) and math.isnan(v))}
             )
             for rec in out.to_dict("records")
         ]
@@ -133,7 +146,7 @@ class KDBStore:
         conn = self._conn()
         name = table_name(key)
         if not q_has(conn, name):
-            raise FileNotFoundError(
+            raise KeyError(
                 f"kdb+ table '{name}' not found on {self.host}:{self.port}."
             )
         df = q_get(conn, name).pd()

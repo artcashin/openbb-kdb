@@ -8,6 +8,16 @@ import os
 import re
 from typing import Any, Optional
 
+# q reserved words that would cause a parse error as table names.
+_Q_KEYWORDS = frozenset({
+    "select", "update", "delete", "exec", "insert", "upsert",
+    "if", "while", "do", "each", "over", "scan", "prior",
+    "except", "inter", "union", "sym", "like", "within",
+    "where", "by", "from", "as", "asc", "desc", "group",
+    "order", "limit", "offset", "in", "or", "and", "not",
+    "null", "true", "false",
+})
+
 
 # --- connection config -----------------------------------------------------
 def resolve_config(
@@ -23,10 +33,16 @@ def resolve_config(
     Env: KDB_HOST (localhost), KDB_PORT (5000), KDB_USER, KDB_PASSWORD.
     """
     creds = credentials or {}
-    host = host or creds.get("kdb_host") or os.getenv("KDB_HOST") or "localhost"
-    port = int(port or creds.get("kdb_port") or os.getenv("KDB_PORT") or 5000)
-    user = user or creds.get("kdb_user") or os.getenv("KDB_USER") or None
-    password = password or creds.get("kdb_password") or os.getenv("KDB_PASSWORD") or None
+    host = host if host is not None else (creds.get("kdb_host") or os.getenv("KDB_HOST") or "localhost")
+    raw = port if port is not None else (creds.get("kdb_port") or os.getenv("KDB_PORT") or 5000)
+    try:
+        port = int(raw)
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"Invalid kdb+ port: {raw!r}. Must be an integer.") from e
+    if not (1 <= port <= 65535):
+        raise ValueError(f"kdb+ port {port} out of range (1–65535).")
+    user = user if user is not None else (creds.get("kdb_user") or os.getenv("KDB_USER") or None)
+    password = password if password is not None else (creds.get("kdb_password") or os.getenv("KDB_PASSWORD") or None)
     return host, port, user, password
 
 
@@ -45,10 +61,20 @@ def get_connection(
     return kx.SyncQConnection(host, port, **kwargs)
 
 
+def close_connection(conn) -> None:
+    """Close a PyKX IPC connection, swallowing errors for idempotent cleanup."""
+    try:
+        conn.close()
+    except Exception:
+        pass
+
+
 def table_name(symbol: str) -> str:
-    """Sanitize a symbol into a valid q table name (alphanumeric/underscore)."""
+    """Sanitize a symbol into a valid q table name (alphanumeric/underscore), avoiding q keywords."""
     s = re.sub(r"[^A-Za-z0-9_]", "_", str(symbol).strip())
     if not s or not s[0].isalpha():
+        s = "t_" + s
+    if s.lower() in _Q_KEYWORDS:
         s = "t_" + s
     return s
 
